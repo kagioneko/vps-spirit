@@ -228,9 +228,11 @@ def render_diary_video(diary: dict) -> Path:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    date_slug = diary["date"].replace("年", "").replace("月", "").replace("日", "")
-    work_dir = OUTPUT_DIR / date_slug
-    work_dir.mkdir(exist_ok=True)
+    _m = __import__("re").match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", diary["date"])
+    date_slug = f"{_m.group(1)}{int(_m.group(2)):02d}{int(_m.group(3)):02d}" if _m else diary["date"].replace("年", "").replace("月", "").replace("日", "")
+    character = "emilia" if diary.get("footer") and "エミリア" in diary.get("footer", "") else "shizuka"
+    work_dir = OUTPUT_DIR / date_slug / character
+    work_dir.mkdir(parents=True, exist_ok=True)
 
     state: NeuroState = diary["state"]
 

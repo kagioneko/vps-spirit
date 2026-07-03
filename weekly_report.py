@@ -23,7 +23,23 @@ load_dotenv(Path(__file__).parent.parent / "discord_bot/.env", override=False)
 GEMINI_QUERY = Path(__file__).parent.parent.parent / "bin" / "gemini_query.sh"
 
 DB_PATH = Path(__file__).parent / "data" / "spirit.db"
-DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
+
+
+def _get_discord_token() -> str:
+    """VaultからDiscord Botトークンを取得します"""
+    result = subprocess.run(
+        ["vault", "kv", "get", "-field=bot_token", "secret/discord"],
+        capture_output=True, text=True,
+        env={**os.environ,
+             "VAULT_ADDR": "https://127.0.0.1:8200",
+             "VAULT_CACERT": "/etc/vault.d/tls/vault-cert.pem"},
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Vaultからのトークン取得に失敗: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+DISCORD_TOKEN = _get_discord_token()
 CHANNEL_ID = "1464850547558449427"
 
 
@@ -177,6 +193,31 @@ def post_to_discord(text: str, days: int):
     print(f"Discord に投稿しました（{len(chunks)}件）")
 
 
+def cleanup_old_outputs(days: int) -> None:
+    """レポート対象期間より古いoutputフォルダを削除する"""
+    import shutil
+    output_dir = Path(__file__).parent / "output"
+    if not output_dir.exists():
+        return
+    cutoff = datetime.now() - timedelta(days=days)
+    removed = []
+    for folder in output_dir.iterdir():
+        if not folder.is_dir():
+            continue
+        # フォルダ名が日付形式（YYYYMMDD）かどうか
+        name = folder.name
+        if len(name) == 8 and name.isdigit():
+            try:
+                folder_date = datetime.strptime(name, "%Y%m%d")
+            except ValueError:
+                continue
+            if folder_date < cutoff:
+                shutil.rmtree(folder)
+                removed.append(name)
+    if removed:
+        print(f"古いoutputを削除: {', '.join(removed)}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="しーちゃん週次レポート生成")
     parser.add_argument("--days", type=int, default=7, help="集計期間（日数）")
@@ -192,4 +233,5 @@ if __name__ == "__main__":
         print("=" * 60)
     else:
         post_to_discord(report, args.days)
+        cleanup_old_outputs(args.days)
         print("完了！")

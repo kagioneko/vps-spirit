@@ -95,6 +95,16 @@ def init_db():
         con.execute("ALTER TABLE memories ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''")
     except Exception:
         pass
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS emilia_diaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            diary_text TEXT NOT NULL,
+            emotion_tag TEXT NOT NULL,
+            date TEXT NOT NULL,
+            state_json TEXT NOT NULL
+        )
+    """)
     con.commit()
     con.close()
 

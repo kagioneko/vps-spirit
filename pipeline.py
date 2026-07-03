@@ -5,11 +5,56 @@ pipeline.py: 精霊の日次パイプライン統括
   python pipeline.py reflect   # 30分ごとの独り言（cronで実行）
   python pipeline.py diary     # 日次日記生成 + 動画作成（cronで実行）
 """
+import os
 import sqlite3
+import subprocess
 import sys
+import urllib.request
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
-from diary import generate_daily_diary, generate_reflection
+BASE_DIR = Path(__file__).parent
+
+DISCORD_CHANNEL_ID = "1464850547558449427"
+VAULT_ADDR = "https://127.0.0.1:8200"
+VAULT_CACERT = "/etc/vault.d/tls/vault-cert.pem"
+
+
+def _get_discord_token() -> str | None:
+    """VaultからDiscordトークンを取得する"""
+    try:
+        result = subprocess.run(
+            ["vault", "kv", "get", "-field=bot_token", "secret/discord"],
+            capture_output=True, text=True,
+            env={**os.environ, "VAULT_ADDR": VAULT_ADDR, "VAULT_CACERT": VAULT_CACERT},
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _notify_discord(message: str):
+    """Discordチャンネルにメッセージを投稿する（失敗しても無視）"""
+    token = _get_discord_token()
+    if not token:
+        return
+    try:
+        data = json.dumps({"content": message}).encode()
+        req = urllib.request.Request(
+            f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages",
+            data=data,
+            headers={
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+from diary import generate_daily_diary, generate_daily_diary_for_date, generate_reflection
 from spirit import (
     DB_PATH, init_db, load_state, save_memory, save_reflection, save_state
 )
@@ -104,6 +149,13 @@ def cmd_diary(kind: str = "日次"):
     video_path = render_diary_video(diary)
 
     # YouTube アップロード（限定公開）
+    # .skip_upload フラグが存在する場合はアップロードをスキップ
+    skip_flag = BASE_DIR / "data" / ".skip_upload"
+    if skip_flag.exists():
+        print("  [3/3] アップロードスキップ（クォータ節約モード）")
+        print(f"\n完了！動画: {video_path}（アップロードは次回クォータリセット後）")
+        return video_path
+
     print("  [3/3] YouTubeアップロード中...")
     now = datetime.now()
     date_str = now.strftime("%Y年%m月%d日")
@@ -114,6 +166,49 @@ def cmd_diary(kind: str = "日次"):
     try:
         url = upload_diary_video(str(video_path), title, date_str)
         _save_diary_log(title, kind)
+        print(f"\n完了！動画: {video_path}")
+        print(f"YouTube: {url}")
+    except Exception as e:
+        err = str(e)
+        print(f"  [警告] アップロード失敗: {e}")
+        print(f"\n完了！動画: {video_path}（YouTubeアップは手動で）")
+        # トークン失効の場合はDiscordに通知
+        if "失効" in err or "RefreshError" in err or "refresh" in err.lower():
+            _notify_discord(
+                "⚠️ **しーちゃん日記** YouTubeトークン失効！\n"
+                f"動画は生成済みです: `{video_path}`\n"
+                "再認証: `cd workspace/vps-spirit && .venv/bin/python youtube_upload.py --setup`"
+            )
+    return video_path
+
+
+def cmd_diary_retroactive(date_str: str):
+    """過去日付の日記を再生成してYouTubeにアップロードする"""
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        print(f"日付フォーマットエラー: {date_str}（例: 2026-06-09）")
+        sys.exit(1)
+
+    print(f"[{datetime.now().strftime('%H:%M')}] ��生成パイプライン開始（{date_str}���")
+
+    init_db()
+
+    print("  [1/3] 日記生成中（過去データ使用）...")
+    diary = generate_daily_diary_for_date(date_str)
+    print(f"  タイトル: {diary['title']}")
+    print(f"  本文（先頭）: {diary['text'][:80]}...")
+
+    print("  [2/3] 動画生成中...")
+    video_path = render_diary_video(diary)
+
+    print("  [3/3] YouTubeアップロード中...")
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    date_jp = dt.strftime("%Y年%m月%d日")
+    title = f"【静霞の日記・再生成】{diary['title']} - {date_jp}"
+    try:
+        url = upload_diary_video(str(video_path), title, date_jp)
+        _save_diary_log(title, "再生成")
         print(f"\n完了！動画: {video_path}")
         print(f"YouTube: {url}")
     except Exception as e:
@@ -128,7 +223,12 @@ if __name__ == "__main__":
         cmd_reflect()
     elif cmd == "diary":
         cmd_diary()
+    elif cmd == "retroactive":
+        if len(sys.argv) < 3:
+            print("使い方: python pipeline.py retroactive YYYY-MM-DD")
+            sys.exit(1)
+        cmd_diary_retroactive(sys.argv[2])
     else:
         print(f"不明なコマンド: {cmd}")
-        print("使い方: python pipeline.py [reflect|diary]")
+        print("使い方: python pipeline.py [reflect|diary|retroactive YYYY-MM-DD]")
         sys.exit(1)

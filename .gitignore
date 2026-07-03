@@ -1,10 +1,38 @@
-youtube_token.json
-client_secrets.json
-*.json
-venv/
+# Python
 __pycache__/
-*.pyc
-data/
-output/
-logs/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets (OAuth, API Credentials)
+client_secrets.json
+youtube_token.json
 .env
+.env.*
+
+# Logs and databases
+*.log
+*.db
+data/*.log
+data/*.db
+stderr.txt
+stdout.txt
+
+# Outputs and cache
+output/
+assets/
+cache/
+daily_shorts_assets/
+*.mp4
+*.wav
+
+# OS/IDE artifacts
+.DS_Store
+.vscode/
+.idea/
+.claude/
+
+# Extra binary leftovers
+C:platform-toolsadb.exe

@@ -1,18 +1,20 @@
 """
-gemini_proxy.py: Gemini CLI を Ollama 互換 API でラップするプロキシ
+gemini_proxy.py: Antigravity CLI (agy) を Ollama 互換 API でラップするプロキシ
 ポート: 11435
 エンドポイント: POST /api/generate  (OllamaClient がそのまま使える)
 """
 import asyncio
 import json
 import subprocess
+import re
+import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 app = FastAPI()
 
-GEMINI_BIN = "/root/.nvm/versions/node/v22.19.0/bin/gemini"
-
+# Antigravity CLI を使用
+GEMINI_BIN = "agy"
 
 class GenerateRequest(BaseModel):
     model: str = "gemini"
@@ -33,15 +35,33 @@ class ChatRequest(BaseModel):
 
 
 def _strip_thinking_leakage(text: str) -> str:
-    """Gemini CLIが思考プロセスを本文に混ぜて出力する場合に除去する"""
+    """Antigravity CLIが思考プロセスを本文に混ぜて出力する場合に除去する"""
     lines = text.splitlines()
-    # 英語の思考漏れ行を除去（"I will", "I need to", "Let me" 等で始まる英語行）
-    import re
-    thinking_pattern = re.compile(
-        r'^(I will|I need|I should|I must|Let me|Let\'s|First,|Next,|Now,|To |Reading|Looking)',
-        re.IGNORECASE
-    )
-    cleaned = [line for line in lines if not thinking_pattern.match(line.strip())]
+    
+    # 英語の思考漏れ行を除去（セッションの冒頭によく出る特定のフレーズのみを対象にする）
+    thinking_patterns = [
+        r'^Looking at.*',
+        r'^Reading .*',
+        r'^I will .*',
+        r'^I need to .*',
+        r'^I should .*',
+        r'^I must .*',
+        r'^Let me .*',
+        r'^Let\'s .*',
+        r'^First, .*',
+        r'^Now, I .*',
+        r'^To .*',
+    ]
+    
+    cleaned = []
+    for line in lines:
+        s_line = line.strip()
+        # 会話の一部として自然なものは残したいので、エンジニアリング用語が含まれる場合のみ消す
+        is_thought = any(re.match(p, s_line, re.IGNORECASE) for p in thinking_patterns)
+        if is_thought and any(kw in s_line.lower() for kw in ["file", "directory", "workspace", "code", "implement", "investigate", "research"]):
+            continue
+        cleaned.append(line)
+    
     return "\n".join(cleaned).strip()
 
 
@@ -51,10 +71,17 @@ async def call_gemini(full_prompt: str) -> str:
         None,
         lambda: subprocess.run(
             [GEMINI_BIN, "-p", full_prompt],
-            capture_output=True, text=True, timeout=120,
-            env={**__import__("os").environ, "HOME": "/root", "PATH": "/root/.nvm/versions/node/v22.19.0/bin:/usr/bin:/bin"}
+            capture_output=True, text=True, timeout=300,  # タイムアウトを5分に延長
+            env={**__import__("os").environ, "HOME": "/home/mayutama", "PATH": "/home/mayutama/.local/bin:/usr/local/bin:/usr/bin:/bin"}
         )
     )
+    
+    if result.returncode != 0:
+        logging.error(f"Antigravity CLI Error: {result.stderr}")
+        if "exhausted your capacity" in result.stderr.lower():
+            return "（現在AIの利用制限がかかっています。しばらくしてからお試しください）"
+        return f"エラー: {result.stderr.strip()}"
+    
     return _strip_thinking_leakage(result.stdout.strip())
 
 
@@ -91,9 +118,9 @@ async def chat(req: ChatRequest):
 
 @app.get("/")
 def health():
-    return {"status": "ok", "backend": "gemini-cli"}
+    return {"status": "ok", "backend": "antigravity"}
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=11435)
+    uvicorn.run(app, host="127.0.0.1", port=11435)

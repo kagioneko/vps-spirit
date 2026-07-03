@@ -14,10 +14,12 @@ import sys
 from pathlib import Path
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from urllib.parse import parse_qs, urlparse
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 BASE_DIR = Path(__file__).parent
@@ -41,7 +43,7 @@ def setup_auth() -> None:
     flow = InstalledAppFlow.from_client_secrets_file(
         str(CLIENT_SECRETS),
         SCOPES,
-        redirect_uri="urn:ietf:wg:oauth:2.0:oob",
+        redirect_uri="http://localhost",
     )
     auth_url, _ = flow.authorization_url(prompt="consent")
 
@@ -53,7 +55,14 @@ def setup_auth() -> None:
     print()
     print(auth_url)
     print()
-    code = input("認証完了後に表示されたコードを貼り付けてください: ").strip()
+    redirect = input("認証後にブラウザが開いたURLを丸ごと貼り付けてください: ").strip()
+    try:
+        code = parse_qs(urlparse(redirect).query)["code"][0]
+    except (KeyError, IndexError):
+        raise RuntimeError(
+            "認証コードをURLから取り出せませんでした。"
+            " http://localhost/?code=... の形式で貼り付けてください。"
+        )
 
     flow.fetch_token(code=code)
     TOKEN_FILE.write_text(flow.credentials.to_json())
@@ -69,7 +78,13 @@ def get_credentials() -> Credentials:
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError as e:
+                raise RuntimeError(
+                    "YouTubeトークンが失効または取り消されています。再認証してください:\n"
+                    "  python youtube_upload.py --setup"
+                ) from e
             TOKEN_FILE.write_text(creds.to_json())
         else:
             raise RuntimeError(
@@ -127,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--setup", action="store_true", help="OAuth2 初回認証を実行")
     parser.add_argument("--upload", metavar="FILE", help="指定動画をテストアップロード（private）")
     parser.add_argument("--title", default="テスト投稿 - 静霞の日記", help="アップロード時のタイトル")
+    parser.add_argument("--description", help="アップロード時の説明文")
     args = parser.parse_args()
 
     if args.setup:
@@ -134,7 +150,7 @@ if __name__ == "__main__":
     elif args.upload:
         from datetime import datetime
         date_str = datetime.now().strftime("%Y年%m月%d日")
-        url = upload_diary_video(args.upload, args.title, date_str)
+        url = upload_diary_video(args.upload, args.title, date_str, description=args.description)
         print(f"✅ アップロード完了: {url}")
     else:
         parser.print_help()
