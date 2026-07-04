@@ -173,16 +173,28 @@ def deploy_to_cloudflare(project_name, dist_dir):
         save_cloudflare_creds(account_id, api_token)
 
     print(f"[*] プロジェクト名: '{project_name}'")
-    print("[*] Cloudflare Pages にデプロイを実行中...")
     
     env = os.environ.copy()
     env["CLOUDFLARE_ACCOUNT_ID"] = account_id
     env["CLOUDFLARE_API_TOKEN"] = api_token
+    env["CI"] = "true"
     
+    # 存在しないプロジェクトを非インタラクティブで自動作成するために、事前に project create を走らせる
+    print(f"[*] Cloudflare Pages プロジェクトを初期化中...")
+    create_cmd = [
+        "npx", "-y", "wrangler", "pages", "project", "create",
+        project_name,
+        "--production-branch", "main"
+    ]
+    # すでに存在する場合はエラーになるが、無視してデプロイに進む
+    subprocess.run(create_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    print("[*] Cloudflare Pages にデプロイを実行中...")
     cmd = [
         "npx", "-y", "wrangler", "pages", "deploy",
         dist_dir,
-        "--project-name", project_name
+        "--project-name", project_name,
+        "--branch", "main"
     ]
     
     try:
@@ -207,6 +219,276 @@ def deploy_to_cloudflare(project_name, dist_dir):
         
     return False
 
+def update_and_deploy_portal(new_app_info=None):
+    """deploy_history.json を読み込み、ポータルサイトを再ビルドしてデプロイする"""
+    import json
+    from datetime import datetime
+    print("\n" + "=" * 60)
+    print("🌐 ポータルサイトの自動更新 & デプロイを実行中...")
+    print("=" * 60)
+    
+    history_file = "/home/mayutama/workspace/ai-microsaas/deploy_history.json"
+    history = []
+    
+    # 1. 履歴の読み込み
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception:
+            pass
+            
+    # 2. 新しいアプリ情報の追加 (重複チェック)
+    if new_app_info:
+        # 重複排除
+        history = [item for item in history if item.get("cloudflare_url") != new_app_info.get("cloudflare_url")]
+        history.append(new_app_info)
+        try:
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+            print("✅ デプロイ履歴ファイル (deploy_history.json) を更新しました。")
+        except Exception as e:
+            print(f"❌ 履歴ファイルの書き込みエラー: {e}")
+
+    # 3. カードHTMLの生成
+    card_templates = []
+    for item in history:
+        title = item.get("title_ja", item.get("title_en", "無題のアプリ"))
+        desc = item.get("pain_point_ja", item.get("title_en", ""))
+        url = item.get("cloudflare_url", "#")
+        stripe_url = item.get("stripe_url", "")
+        
+        # 決済タイプ判別
+        is_free = "mock_paywall" in stripe_url or not stripe_url
+        price_badge = "Free" if is_free else "$5 Lifetime"
+        if "journal" in url or "transl" in url or "completely-free" in url:
+            price_badge = "Free (BYOK)"
+        elif "crm" in url or "rewrit" in url:
+            price_badge = "$9 Lifetime"
+        
+        # アイコンの動的決定
+        icon = "sparkles"
+        icon_color = "text-purple-400"
+        bg_color = "bg-purple-500/10"
+        border_color = "border-purple-500/20"
+        
+        if "bg-remover" in url or "one-click-bg" in url:
+            icon, icon_color, bg_color, border_color = "scissors", "text-purple-400", "bg-purple-500/10", "border-purple-500/20"
+        elif "jour" in url:
+            icon, icon_color, bg_color, border_color = "book-open", "text-pink-400", "bg-pink-500/10", "border-pink-500/20"
+        elif "transl" in url:
+            icon, icon_color, bg_color, border_color = "languages", "text-blue-400", "bg-blue-500/10", "border-blue-500/20"
+        elif "crm" in url:
+            icon, icon_color, bg_color, border_color = "users", "text-indigo-400", "bg-indigo-500/10", "border-indigo-500/20"
+        elif "health" in url or "wellness" in url:
+            icon, icon_color, bg_color, border_color = "activity", "text-teal-400", "bg-teal-500/10", "border-teal-500/20"
+        elif "converter" in url:
+            icon, icon_color, bg_color, border_color = "image", "text-emerald-400", "bg-emerald-500/10", "border-emerald-500/20"
+        elif "neko" in url or "mailbox" in url:
+            icon, icon_color, bg_color, border_color = "mail animate-bounce", "text-orange-400", "bg-orange-500/10", "border-orange-500/20"
+        elif "pitch" in url or "rewrit" in url:
+            icon, icon_color, bg_color, border_color = "pen-tool", "text-rose-400", "bg-rose-500/10", "border-rose-500/20"
+
+        badge_class = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" if "Free" in price_badge else "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+
+        card_html = f"""
+            <div class="app-card glass-panel premium-border p-6 rounded-2xl flex flex-col justify-between hover:scale-[1.02] transition-all duration-300" 
+                 data-title="{title}" data-desc="{desc}" data-premium="{"false" if "Free" in price_badge else "true"}">
+                <div>
+                    <div class="flex justify-between items-start mb-4">
+                        <div class="p-3 {bg_color} rounded-xl border {border_color} {icon_color}">
+                            <i data-lucide="{icon.split(' ')[0]}" class="w-6 h-6 {"animate-bounce" if "bounce" in icon else ""}"></i>
+                        </div>
+                        <span class="badge {badge_class} font-bold">{price_badge}</span>
+                    </div>
+                    <h3 class="text-xl font-bold text-white mb-2">{title}</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed mb-6">
+                        {desc}
+                    </p>
+                </div>
+                <a href="{url}" target="_blank" class="btn btn-sm btn-outline border-white/10 hover:bg-purple-600 hover:border-purple-600 text-slate-200 w-full mt-auto flex items-center justify-center gap-1">
+                    <span>アプリを開く</span>
+                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                </a>
+            </div>"""
+        card_templates.append(card_html)
+        
+    cards_combined = "\n".join(card_templates)
+
+    # 4. テンプレートHTMLの準備
+    portal_html = f"""<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Micro-SaaS Factory | Showcase Portal</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Noto+Sans+JP:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {{
+            theme: {{
+                extend: {{
+                    fontFamily: {{
+                        sans: ['Outfit', 'Noto Sans JP', 'sans-serif'],
+                    }}
+                }}
+            }}
+        }}
+    </script>
+    <style>
+        .glass-panel {{
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }}
+        .premium-border {{
+            position: relative;
+        }}
+        .premium-border::after {{
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.4) 0%, rgba(236, 72, 153, 0.4) 50%, rgba(245, 158, 11, 0.2) 100%);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }}
+        .filter-btn.active {{
+            background: #8B5CF6;
+            color: white;
+            border-color: #8B5CF6;
+        }}
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen relative overflow-x-hidden">
+    <div class="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] rounded-full bg-purple-900/10 blur-[130px] pointer-events-none"></div>
+    <div class="absolute top-[40%] right-[-10%] w-[500px] h-[500px] rounded-full bg-pink-900/10 blur-[130px] pointer-events-none"></div>
+    <div class="absolute bottom-[-10%] left-[20%] w-[700px] h-[700px] rounded-full bg-blue-900/10 blur-[150px] pointer-events-none"></div>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-20 relative z-10">
+        <header class="text-center max-w-3xl mx-auto mb-12">
+            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-semibold mb-6">
+                <i data-lucide="zap" class="w-3.5 h-3.5 text-purple-400 animate-pulse"></i>
+                <span>完全自律型・インキュベーターAI</span>
+            </div>
+            <h1 class="text-4xl sm:text-5xl md:text-6xl font-black tracking-tight leading-tight bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent mb-6">
+                AI Micro-SaaS Factory
+            </h1>
+            <p class="text-slate-400 text-lg md:text-xl font-medium max-w-2xl mx-auto leading-relaxed">
+                世の中の要望からAIが自動構築し、決済機能を備えた各種ミニWebアプリケーションのポートフォリオ。
+            </p>
+        </header>
+
+        <!-- Stats Section -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto mb-12">
+            <div class="glass-panel p-6 rounded-2xl text-center">
+                <div class="text-slate-400 text-sm font-semibold mb-1">量産アプリ数</div>
+                <div class="text-3xl md:text-4xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">{len(history)}</div>
+            </div>
+            <div class="glass-panel p-6 rounded-2xl text-center">
+                <div class="text-slate-400 text-sm font-semibold mb-1">デプロイ環境</div>
+                <div class="text-xl md:text-2xl font-black text-slate-100 mt-2">Cloudflare</div>
+            </div>
+            <div class="glass-panel p-6 rounded-2xl text-center">
+                <div class="text-slate-400 text-sm font-semibold mb-1">決済システム</div>
+                <div class="text-xl md:text-2xl font-black text-slate-100 mt-2">Stripe</div>
+            </div>
+            <div class="glass-panel p-6 rounded-2xl text-center">
+                <div class="text-slate-400 text-sm font-semibold mb-1">開発コスト / 個</div>
+                <div class="text-3xl md:text-4xl font-black text-emerald-400">$0</div>
+            </div>
+        </div>
+
+        <!-- 🔍 Search & Filter Bar -->
+        <div class="max-w-4xl mx-auto mb-12 flex flex-col md:flex-row gap-4 items-center">
+            <div class="relative w-full flex-1">
+                <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                    <i data-lucide="search" class="w-5 h-5"></i>
+                </span>
+                <input id="searchInput" type="text" oninput="filterApps()" 
+                       class="w-full pl-10 pr-4 py-3 bg-slate-900/60 border border-white/10 rounded-2xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500 text-base" 
+                       placeholder="アプリ名やキーワードで検索...">
+            </div>
+            <div class="flex gap-2 w-full md:w-auto">
+                <button onclick="setFilter('all', this)" class="filter-btn active btn btn-md border-white/10 bg-slate-900/60 text-slate-300 rounded-2xl flex-1 md:flex-initial">すべて</button>
+                <button onclick="setFilter('paid', this)" class="filter-btn btn btn-md border-white/10 bg-slate-900/60 text-slate-300 rounded-2xl flex-1 md:flex-initial">有料 / プレミアム</button>
+                <button onclick="setFilter('free', this)" class="filter-btn btn btn-md border-white/10 bg-slate-900/60 text-slate-300 rounded-2xl flex-1 md:flex-initial">無料 / BYOK</button>
+            </div>
+        </div>
+
+        <!-- Grid Layout for SaaS Apps -->
+        <div id="appsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+{cards_combined}
+        </div>
+
+        <footer class="mt-28 border-t border-white/5 pt-8 text-center text-xs text-slate-500">
+            <p>© {datetime.now().year} AI Micro-SaaS Factory. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script>
+        lucide.createIcons();
+        let currentFilter = 'all';
+
+        function setFilter(filterType, element) {{
+            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+            element.classList.add('active');
+            currentFilter = filterType;
+            filterApps();
+        }}
+
+        function filterApps() {{
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const cards = document.querySelectorAll('.app-card');
+            
+            cards.forEach(card => {{
+                const title = card.dataset.title.toLowerCase();
+                const desc = card.dataset.desc.toLowerCase();
+                const isPremium = card.dataset.premium === 'true';
+                
+                const matchesQuery = title.includes(query) || desc.includes(query);
+                let matchesFilter = true;
+                if (currentFilter === 'paid') matchesFilter = isPremium;
+                if (currentFilter === 'free') matchesFilter = !isPremium;
+                
+                if (matchesQuery && matchesFilter) {{
+                    card.style.display = 'flex';
+                }} else {{
+                    card.style.display = 'none';
+                }}
+            }});
+        }}
+    </script>
+</body>
+</html>"""
+    
+    # 5. 書き出し
+    portal_dir = "/home/mayutama/workspace/ai-microsaas/portal"
+    os.makedirs(portal_dir, exist_ok=True)
+    output_file = os.path.join(portal_dir, "index.html")
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(portal_html)
+    print("✅ ポータルサイトのHTMLを再構築しました。")
+
+    # 6. デプロイ
+    account_id, api_token = get_cloudflare_creds()
+    if not account_id or not api_token:
+        print("❌ Cloudflare認証情報が見つかりません。ポータルのデプロイをスキップします。")
+        return
+        
+    project_name = f"saas-factory-portal-{account_id[:6]}"
+    print(f"[*] ポータルサイトをデプロイ中... ({project_name})")
+    url = deploy_to_cloudflare(project_name, portal_dir)
+    if url:
+        print(f"\n🎉 ポータルShowcaseサイトが最新の状態に更新されました！")
+        print(f"🌐 共有URL: {url}")
+
 def main():
     print("=" * 60)
     print("🚀 AI Micro-SaaS Creator & Auto-Monetizer (Phase 1) 🚀")
@@ -222,13 +504,32 @@ def main():
         return
 
     # 出力ファイル名用にディレクトリとアプリ名を定義
-    app_id = re.sub(r'[^a-zA-Z0-9]', '_', idea)[:30].strip('_').lower()
-    if not app_id:
+    # 日本語のアイデアからでも適切な英語のslugを生成するために、まずGeminiに適切な英語のプロジェクトID（英数字とハイフンのみ）を提案させる
+    print("[*] アイデアに基づき、英語のプロジェクト名(Slug)を生成中...")
+    slug_prompt = (
+        f"Suggest a short, unique, lowercase English slug (using only a-z, 0-9, and hyphens, 8 to 20 characters) "
+        f"that perfectly describes this app idea: '{idea}'. Output ONLY the slug, no other text."
+    )
+    suggested_slug = run_gemini(slug_prompt)
+    if suggested_slug:
+        # 余計なマークダウンや改行を除去
+        suggested_slug = suggested_slug.strip().replace("`", "").split('\n')[0].strip()
+        app_id = re.sub(r'[^a-z0-9\-]', '-', suggested_slug.lower())
+        app_id = re.sub(r'\-+', '_', app_id).strip('_')
+    else:
+        app_id = re.sub(r'[^a-zA-Z0-9]', '_', idea)[:30].strip('_').lower()
+        
+    if not app_id or app_id == "1":
         app_id = "my_micro_saas"
         
-    # Cloudflareプロジェクト名用にサニタイズ (英数字とハイフンのみ)
-    project_name = re.sub(r'[^a-zA-Z0-9\-]', '-', app_id.replace('_', '-'))
-    project_name = re.sub(r'\-+', '-', project_name).strip('-')
+    # Cloudflareプロジェクト名用にサニタイズ (英数字とハイフンのみ)し、競合を避けるために日付などのサフィックスを追加
+    # 例: background-remover-260705
+    from datetime import datetime
+    suffix = datetime.now().strftime("%y%m%d")
+    
+    base_project_name = re.sub(r'[^a-zA-Z0-9\-]', '-', app_id.replace('_', '-'))
+    base_project_name = re.sub(r'\-+', '-', base_project_name).strip('-')
+    project_name = f"{base_project_name}-{suffix}"
     
     # 人間が読める形式のアプリ名に変換 (例: Image Converter)
     readable_name = " ".join([word.capitalize() for word in app_id.split('_')])
@@ -334,6 +635,18 @@ Return ONLY the raw HTML code inside a code block ```html ... ```. No additional
             print("\n🚀 デプロイ完了しました！")
             print(f"   本番公開URL: {deployed_url}")
             print(f"   (Stripeのダミーキー「SaaS-FREE-TEST-2026」で制限解除して動作テストを行ってください)")
+            
+            # 履歴用のデータを作成し、ポータルを自動更新＆デプロイ
+            from datetime import datetime
+            new_app_info = {
+                "title_en": readable_name,
+                "title_ja": readable_name,
+                "pain_point_ja": idea,
+                "stripe_url": checkout_url,
+                "cloudflare_url": deployed_url,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            update_and_deploy_portal(new_app_info)
     else:
         print("\n💡 ローカルでのテスト方法:")
         print("1. ブラウザで上記の HTML ファイルをダブルクリックして開きます。")
