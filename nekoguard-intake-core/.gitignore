@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Scanner Outputs
+nekoguard_report/
+test_media/
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
