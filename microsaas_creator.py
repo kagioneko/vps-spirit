@@ -277,6 +277,25 @@ Requirements:
    - If the user enters the key 'SaaS-FREE-TEST-2026', unlock the full features immediately, show a success toast, and save the status as `isPremium = true` in `localStorage` so it persists between reloads.
    - The design must include a lock icon overlay or warning state for premium features.
 
+4. MOBILE-FIRST RESPONSIVE MONETIZATION UI:
+   - The entire application layout and paywall interface MUST be mobile-first responsive.
+   - On small screens (smartphones), ensure all purchase call-to-actions (CTAs) are large and tap-friendly (minimum button height of 48px, plenty of touch padding).
+   - Ensure the premium modal does not overflow and centers beautifully on mobile. Set input fields (like the License Key input) to a font size of at least 16px to prevent iOS devices from automatically zooming in when focusing the input field.
+
+5. LEGAL & TRUST (DISCLAIMER / PRIVACY POLICY / ASCT):
+   - At the bottom of the page (footer), implement clean, clickable links for "Privacy Policy", "Disclaimer", and "特定商取引法に基づく表記" (Act on Specified Commercial Transactions).
+   - Clicking these links must trigger a small, elegant modal that clearly states:
+     a) Privacy Policy: The app runs entirely in the client-side browser and utilizes `localStorage` for data persistence. No personal data or user inputs are collected or sent to external servers.
+     b) Disclaimer: The tool is provided "as is" without any warranty of any kind. The developer is not liable for any data loss, damages, or issues arising from its usage.
+     c) 特定商取引法に基づく表記: Display the following template in Japanese:
+        - 販売業者/運営者: [運営者名 / 表示請求があった場合は遅滞なく開示します]
+        - 連絡先メールアドレス: [サポート窓口メール / 表示請求があった場合は遅滞なく開示します。※プレースホルダー: support@example.com]
+        - 住所・電話番号: 表示請求があった場合、遅滞なく電子メール等の書面にて提供いたします。
+        - 販売価格: 各アプリ紹介・アップグレード画面に表示
+        - 支払方法と時期: クレジットカード決済 (Stripe)。決済時に支払いが確定します。
+        - 引渡時期: 決済完了後、即時（ライセンスキーの提供およびアクティベーション）。
+        - 返品・キャンセル: デジタルコンテンツの性質上、購入後のキャンセルや返金はできません。
+
 Return ONLY the raw HTML code inside a code block ```html ... ```. No additional conversational text.
 """
 
